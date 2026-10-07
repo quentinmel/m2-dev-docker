@@ -1,0 +1,24 @@
+services:
+  api:
+    build:
+      target: prod
+    image: ${API_IMAGE:-td4-api}
+    ports:
+      - "${API_PORT:-8000}:3000"
+    environment:
+      DB_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    mem_limit: 256m
+
+  db:
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    restart: unless-stopped
+
+  cache:
+    restart: unless-stopped
