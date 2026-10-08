@@ -246,11 +246,7 @@ secrets/
 └── db_password.txt
 ```
 
-Le fichier contient uniquement le mot de passe :
-
-```text
-td3password
-```
+Le fichier contiendrait uniquement le mot de passe PostgreSQL.
 
 Il doit être ajouté au `.gitignore`.
 
@@ -538,51 +534,38 @@ Cette vérification montre qu'un scan Trivy avec `--severity CRITICAL --exit-cod
 
 ### B4.
 
-Le projet étant hébergé sur GitHub, j'ai utilisé GitHub Actions pour mettre en place la chaîne CI/CD.
-
-Le workflow se trouve dans :
+J'ai configuré un workflow GitHub Actions dans :
 
 ```text
 .github/workflows/docker.yml
 ```
 
-Le pipeline est composé de quatre jobs :
+Le workflow est composé de quatre jobs :
 
-```text
-build
-  ↓
-scan
-  ↓
-test
-  ↓
-publish
-```
+build > scan > test > publish
 
-#### Build
-
-Le premier job récupère le dépôt et construit l'image Docker à partir du Dockerfile de l'application :
+J'ai configuré la construction de l'image Docker à partir du Dockerfile de l'application :
 
 ```bash
 docker build -t "$IMAGE_NAME" ./td4/app
 ```
 
-L'image est ensuite exportée dans une archive :
+J'ai également configuré l'export de l'image dans une archive :
 
 ```bash
 docker save "$IMAGE_NAME" -o image.tar
 ```
 
-Cette archive est transférée au job suivant avec un artifact GitHub Actions.
+Cette archive est ensuite transférée au job suivant avec un artifact GitHub Actions.
 
-#### Scan
 
-Le job `scan` récupère l'artifact et recharge l'image :
+J'ai configuré le job scan pour récupérer l'artifact et recharger l'image :
 
 ```bash
 docker load -i image.tar
 ```
 
-Trivy est ensuite exécuté dans un conteneur Docker :
+J'ai ensuite configuré Trivy pour analyser l'image depuis un conteneur Docker :
 
 ```bash
 docker run --rm \
@@ -595,111 +578,81 @@ docker run --rm \
   "$IMAGE_NAME"
 ```
 
-L'option `--exit-code 1` permet de faire échouer le job si une vulnérabilité `CRITICAL` est détectée.
+L'option --exit-code 1 permet de faire échouer le job si une vulnérabilité CRITICAL est détectée.
 
-#### Test
 
-Le job `test` recharge également l'image depuis l'artifact :
+J'ai configuré un job test qui récupère également l'image depuis l'artifact et la recharge :
 
 ```bash
 docker load -i image.tar
 ```
 
-Il exécute ensuite l'image avec `docker run` :
+Le test exécute ensuite directement l'image avec :
 
 ```bash
 docker run --rm "$IMAGE_NAME" node --version
 ```
 
-Le test utilise uniquement l'image Docker et ne monte aucun fichier du dépôt dans le conteneur. Le conteneur Docker n'a donc pas accès directement aux fichiers du dépôt.
+Aucun fichier du dépôt n'est monté dans le conteneur pendant ce test.
 
-#### Publication
 
-Le dernier job publie l'image dans GitHub Container Registry (GHCR).
+J'ai configuré un dernier job publish qui dépend du succès du job test :
 
-Il dépend du succès du job `test` :
-
-```yaml
+```text
 needs: test
 ```
 
-La publication est également limitée aux push sur la branche `main` :
+J'ai également limité la publication aux push effectués sur la branche `main` :
 
-```yaml
+```text
 if: github.event_name == 'push' && github.ref == 'refs/heads/main'
 ```
 
-Le workflow utilise le token fourni automatiquement par GitHub :
+J'ai configuré les permissions nécessaires pour publier dans GitHub Container Registry :
 
-```yaml
+```text
 permissions:
   contents: read
   packages: write
 ```
 
-La connexion à GHCR est réalisée avec :
+La connexion à GHCR utilise le `GITHUB_TOKEN` fourni par GitHub Actions.
 
-```yaml
-registry: ghcr.io
-username: ${{ github.actor }}
-password: ${{ secrets.GITHUB_TOKEN }}
-```
+L'image est identifiée avec le SHA du commit :
 
-L'image est ensuite publiée avec :
-
-```bash
-docker push "$IMAGE_NAME"
-```
-
-Le nom de l'image utilise le SHA du commit :
-
-```yaml
+```text
 IMAGE_NAME: ghcr.io/${{ github.repository }}/visites-api:${{ github.sha }}
 ```
 
-Cela permet d'identifier précisément la version de l'image correspondant au commit utilisé pour sa construction.
+Le pipeline est donc configuré pour suivre le processus :
 
-Le fonctionnement attendu est donc le suivant :
+Code source > Build > Scan Trivy > Test > Publication GHCR
 
-```text
-Pull Request :
-Build → Scan → Test
-                  ↓
-              pas de publication
-
-Push sur main :
-Build → Scan → Test → Publish GHCR
-```
-
-Si le scan Trivy détecte une vulnérabilité `CRITICAL`, le job `scan` échoue. Les jobs suivants ne sont alors pas exécutés et l'image n'est pas publiée.
-
-De la même manière, si le test échoue, le job `publish` ne peut pas s'exécuter.
-
-L'image est transférée entre les jobs avec `docker save`, un artifact GitHub Actions et `docker load`. Cela permet aux différents jobs d'utiliser exactement la même image sans reconstruire l'image à chaque étape.
+Le workflow GitHub Actions a été configuré, mais je n'ai pas encore effectué une exécution complète permettant de valider chaque étape du pipeline et la publication dans GHCR.
 
 ---
 
 ### B5.
 
-Pour utiliser l'image publiée dans GHCR sur une machine de déploiement, il est possible de fournir son nom à Compose avec la variable `API_IMAGE`.
+J'ai préparé le fichier `compose.prod.yaml` afin qu'il puisse utiliser une image déjà construite et publiée dans un registre Docker.
 
-Le fichier `compose.prod.yaml` utilise cette variable :
+L'image utilisée par l'API est définie avec :
 
-```yaml
+```text
 image: ${API_IMAGE:-td4-api}
 ```
 
-La valeur par défaut est `td4-api`, mais elle peut être remplacée par une image publiée dans GHCR.
+La variable `API_IMAGE` permet donc de remplacer l'image locale par une image publiée dans GHCR.
 
-Après s'être connecté au registre :
+La procédure prévue pour utiliser une image publiée est :
 
 ```bash
 docker login ghcr.io
 ```
 
-on peut lancer la stack de production avec :
+puis :
 
-```bash
+```text
 API_IMAGE=ghcr.io/<owner>/<repository>/visites-api:<commit> \
 docker compose \
   -f compose.yaml \
@@ -707,28 +660,8 @@ docker compose \
   up -d --no-build
 ```
 
-`--no-build` est important car il empêche Docker de reconstruire localement l'image. La machine de déploiement utilise donc directement l'image déjà construite et publiée par le pipeline CI/CD.
+L'option --no-build permet d'empêcher Docker de reconstruire l'image localement. Compose utilise directement l'image indiquée par API_IMAGE.
 
-Le tag correspondant au SHA du commit permet d'identifier précisément la version déployée. Contrairement à un tag générique comme `latest`, un tag basé sur le commit permet de savoir exactement quel code source a produit l'image.
+L'utilisation du SHA du commit comme tag permet d'identifier précisément la version de l'image qui a été construite par le pipeline.
 
-Le principe est donc :
-
-```text
-Code source
-    ↓
-GitHub Actions
-    ↓
-Build Docker
-    ↓
-Scan Trivy
-    ↓
-Tests
-    ↓
-GHCR
-    ↓
-docker compose --no-build
-    ↓
-Image correspondant au commit
-```
-
-Cette approche permet de séparer clairement la construction de l'image et son déploiement. L'image déployée correspond directement à celle qui a été construite, analysée et validée par la CI.
+J'ai préparé cette configuration, mais je n'ai pas encore effectué le déploiement réel depuis une image publiée dans GHCR.
